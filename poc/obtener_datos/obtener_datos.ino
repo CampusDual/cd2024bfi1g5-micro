@@ -1,37 +1,53 @@
-#include <Wire.h>
-#include "Adafruit_SHTC3.h"
+#include "SparkFun_SHTC3.h"
 
-// Crear una instancia del sensor
-Adafruit_SHTC3 shtc3 = Adafruit_SHTC3();
+SHTC3 mySHTC3;
 
 void setup() {
   Serial.begin(9600);
-  delay(1000); // Esperar un momento para inicializar
 
   // Inicializar el sensor
-  if (!shtc3.begin()) {
-    Serial.println("No se pudo encontrar un sensor SHTC3");
-    while (1); // Detener el programa si no se encuentra el sensor
-  }
+  while (!Serial)
+    ;
 
-  Serial.println("Sensor SHTC3 inicializado correctamente.");
+  Serial.println("SHTC3 Example 1 - Basic Readings");
+  Wire.begin();
+  Serial.print("Beginning sensor. Result = ");
+  errorDecoder(mySHTC3.begin());
+  Serial.println();
+  Serial.println("\n\n");
+  Serial.println("Waiting for 5 seconds so you can read this info ^^^");
+
+  delay(5000);
 }
 
 void loop() {
-  sensors_event_t humedad, temperatura;
+  SHTC3_Status_TypeDef result = mySHTC3.update();
+  printInfo();
+  delay(2000);
+}
 
-  // Leer los datos del sensor
-  if (shtc3.getEvent(&humedad, &temperatura)) {
-    Serial.print("Temperatura: ");
-    Serial.print(temperatura.temperature);
-    Serial.println(" °C");
 
-    Serial.print("Humedad: ");
-    Serial.print(humedad.relative_humidity);
-    Serial.println(" %");
+void printInfo() {
+  if (mySHTC3.lastStatus == SHTC3_Status_Nominal)  
+  {
+    Serial.print("RH = ");
+    Serial.print(mySHTC3.toPercent());  
+    Serial.print("%, T = ");
+    Serial.print(mySHTC3.toDegC());  
+    Serial.println(" deg C");
   } else {
-    Serial.println("Error al leer los datos del sensor");
+    Serial.print("Update failed, error: ");
+    errorDecoder(mySHTC3.lastStatus);
+    Serial.println();
   }
+}
 
-  delay(2000); // Leer cada 2 segundos
+void errorDecoder(SHTC3_Status_TypeDef message) 
+{
+  switch (message) {
+    case SHTC3_Status_Nominal: Serial.print("Nominal"); break;
+    case SHTC3_Status_Error: Serial.print("Error"); break;
+    case SHTC3_Status_CRC_Fail: Serial.print("CRC Fail"); break;
+    default: Serial.print("Unknown return code"); break;
+  }
 }
