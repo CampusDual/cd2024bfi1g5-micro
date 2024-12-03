@@ -1,8 +1,6 @@
 #include <WiFi.h>
 #include <Preferences.h>
-
-const char* ssid = "nombre";
-const char* password = "contraseña";
+#include "config.h"
  
 Preferences preferences;
  
