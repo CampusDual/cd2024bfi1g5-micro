@@ -6,8 +6,7 @@ void setup() {
   Serial.begin(9600);
 
   // Inicializar el sensor
-  while (!Serial)
-    ;
+  while (!Serial);
 
   Serial.println("SHTC3 Example 1 - Basic Readings");
   Wire.begin();
@@ -42,8 +41,7 @@ void printInfo() {
   }
 }
 
-void errorDecoder(SHTC3_Status_TypeDef message) 
-{
+void errorDecoder(SHTC3_Status_TypeDef message){
   switch (message) {
     case SHTC3_Status_Nominal: Serial.print("Nominal"); break;
     case SHTC3_Status_Error: Serial.print("Error"); break;
