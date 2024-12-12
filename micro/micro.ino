@@ -14,18 +14,13 @@ Preferences preferences;
 const char* ap_ssid = "ESP32_Config";
 const char* ap_password = "12345678";
 
-// Configuración del servidor HTTP y NTP
-const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 3600;
-const int daylightOffset_sec = 3600;
-
 // Configuración del sensor SHTC3
 SHTC3 mySHTC3;
-int16_t humidity = 0;
-int16_t temperatureNow = 0;
+float humidity = 0;
+float temperatureNow = 0;
 
 // Configuración del servidor remoto
-String server_url = "https://webhook.site/#!/view/1f8d7fde-961c-471a-b731-1f2ce41b78ec";
+String server_url = "http://localhost:8080/measurements/measurements";
 
 
 
@@ -56,7 +51,7 @@ void setup() {
         delay(500);
         Serial.print(".");
       }
-
+ 
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println("\nWiFi conectado");
         Serial.print("Dirección IP: ");
@@ -69,7 +64,7 @@ void setup() {
           Serial.println("Error al iniciar mDNS responder.");
         }
         
-        initSensorAndTime();
+        initSensor();
       } else {
         Serial.println("\nNo se pudo conectar al WiFi guardado. Iniciando modo AP...");
         startAccessPoint();
@@ -93,12 +88,12 @@ void loop() {
 
   if (WiFi.status() == WL_CONNECTED) {
     if (mySHTC3.update() == SHTC3_Status_Nominal) {
-      temperatureNow = int(mySHTC3.toDegC() * 10);
-      humidity = int(mySHTC3.toPercent() * 10);
+      temperatureNow = int(mySHTC3.toDegC());
+      humidity = int(mySHTC3.toPercent());
 
-      Serial.print("Temperatura (ºC * 10): ");
+      Serial.print("Temperatura (ºC): ");
       Serial.println(temperatureNow);
-      Serial.print("Humedad (% * 10): ");
+      Serial.print("Humedad (%): ");
       Serial.println(humidity);
 
       sendDataToServer();
@@ -203,8 +198,8 @@ void handleReset() {
   ESP.restart();
 }
 
-// Iniciar sensor y sincronizar hora
-void initSensorAndTime() {
+// Iniciar sensor
+void initSensor() {
   Serial.println("Inicializando sensor SHTC3...");
   Wire.begin();
   if (mySHTC3.begin() == SHTC3_Status_Nominal) {
@@ -213,15 +208,6 @@ void initSensorAndTime() {
     Serial.println("Error al inicializar el sensor SHTC3.");
     while (1);
   }
-
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  Serial.println("Sincronizando hora...");
-  struct tm timeinfo;
-  while (!getLocalTime(&timeinfo)) {
-    Serial.println("Fallo al obtener la hora. Reintentando...");
-    delay(2000);
-  }
-  Serial.println("Hora sincronizada correctamente.");
 }
 
 // Enviar datos al servidor
@@ -239,15 +225,13 @@ void sendDataToServer() {
   http.begin(server_url);
   http.addHeader("Content-Type", "application/json");
 
-  String currentTime = getFormattedTime();
   String macAddress = WiFi.macAddress();
 
-  String payload = "{";
-  payload += "\"m\": \"" + macAddress + "\",";
-  payload += "\"t\": \"" + currentTime + "\",";
-  payload += "\"te\": " + String(temperatureNow) + ",";
-  payload += "\"h\": " + String(humidity);
-  payload += "}";
+  String payload = "{\"data\": {";
+  payload += "\"DEV_MAC\": \"" + macAddress + "\",";
+  payload += "\"ME_TEMP\": " + String(temperatureNow) + ",";
+  payload += "\"ME_HUMIDITY\": " + String(humidity);
+  payload += "}}"; 
 
   Serial.print("Payload enviado: ");
   Serial.println(payload);
@@ -264,15 +248,4 @@ void sendDataToServer() {
   }
 
   http.end();
-}
-
-// Obtener la hora formateada
-String getFormattedTime() {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    return "Error obteniendo hora";
-  }
-  char buffer[20];
-  strftime(buffer, sizeof(buffer), "%Y%m%d%H%M%S", &timeinfo);
-  return String(buffer);
 }
