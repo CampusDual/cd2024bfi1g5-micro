@@ -25,7 +25,7 @@ int16_t humidity = 0;
 int16_t temperatureNow = 0;
 
 // Configuración del servidor remoto
-String server_url = "https://webhook.site/#!/view/1f8d7fde-961c-471a-b731-1f2ce41b78ec";
+String server_url = "https://webhook.site/7b4cd959-de47-4527-ae40-64fff4ac4cb1";
 
 void setup() {
   Serial.begin(9600);
@@ -121,8 +121,8 @@ void handleRoot() {
   String html = R"rawliteral(
     <!DOCTYPE html>
     <html>
+    <meta charset="UTF-8">
     <head>
-      <meta charset="UTF-8">
       <title>Configuración ESP32</title>
     </head>
     <body>
@@ -135,9 +135,6 @@ void handleRoot() {
         <label for="server_url">URL del servidor:</label><br>
         <input type="text" id="server_url" name="server_url"><br><br>
         <input type="submit" value="Guardar">
-      </form>
-      <form action="/reset" method="GET" style="margin-top: 20px;">
-        <input type="submit" value="Resetear Configuración">
       </form>
     </body>
     </html>
@@ -165,28 +162,6 @@ void handleSave() {
     server.send(200, "text/html", html);
 
     Serial.println("Nueva URL configurada: " + newServerURL);
-
-    //Intentar conectarse a la Wifi
-    Serial.println("Intentando conectar al WiFi guardado...");
-    WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
-
-    unsigned long startTime = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startTime < 10000) { // Tiempo de espera 10s
-      delay(500);
-      Serial.print(".");
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nWiFi conectado");
-      Serial.print("Dirección IP: ");
-      Serial.println(WiFi.localIP());
-      Serial.println("Desactivando Access Point...");
-      WiFi.softAPdisconnect(true);
-    } else {
-      Serial.println("\nError al conectarse a la Wifi");
-      startAccessPoint();
-    }
-
   } else {
     server.send(400, "text/html", "<h1>Error: Todos los campos son obligatorios.</h1>");
   }
