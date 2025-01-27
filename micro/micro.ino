@@ -21,7 +21,8 @@ float humidity = 0;
 float temperatureNow = 0;
 
 // Configuración del servidor remoto
-String server_url = "https://cd2024bfi1g1-dev.dev.campusdual.com/measurements/measurements";
+// url servidor dev "https://cd2024bfi1g1-dev.dev.campusdual.com/measurements/measurements"
+String server_url = "";
 
 void setup() {
   Serial.begin(9600);
@@ -87,7 +88,7 @@ void loop() {
 
   if (WiFi.status() == WL_CONNECTED) {
     unsigned long currentTime = millis();
-    if (currentTime - lastSendTime >= 900000) {  // 900000 ms = 15 minutos
+    if (currentTime - lastSendTime >= 60000) {  // 60000 ms = 1 minuto
       if (mySHTC3.update() == SHTC3_Status_Nominal) {
         temperatureNow = mySHTC3.toDegC();
         humidity = mySHTC3.toPercent();
@@ -380,15 +381,17 @@ void sendDataToServer() {
   Serial.println(server_url);
 
   http.begin(server_url);
+  http.addHeader("Authorization", "Basic YWRtaW5NaWNyb3M6YWRtaW5taWNyb3MxMjM=");
   http.addHeader("Content-Type", "application/json");
 
   String macAddress = WiFi.macAddress();
 
-  String payload = "{\"data\": {";
-  payload += "\"DEV_MAC\": \"" + macAddress + "\",";
-  payload += "\"ME_TEMP\": " + String(temperatureNow) + ",";
-  payload += "\"ME_HUMIDITY\": " + String(humidity);
-  payload += "}}";
+  String payload = "{";
+    payload += "\"data\": {";
+    payload += "\"DEV_MAC\":\"" + WiFi.macAddress() + "\",";
+    payload += "\"ME_TEMP\":" + String(temperatureNow) + ",";
+    payload += "\"ME_HUMIDITY\":" + String(humidity);
+    payload += "}}";
 
   Serial.print("Payload enviado: ");
   Serial.println(payload);
