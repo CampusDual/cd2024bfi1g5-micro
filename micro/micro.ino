@@ -1,130 +1,34 @@
 #include <WiFi.h>
-#include <WebServer.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <DNSServer.h>
 #include <Preferences.h>
 #include <HTTPClient.h>
-#include <ESPmDNS.h>  // Para mDNS
+#include <ESPmDNS.h>
+#include <ArduinoJson.h>
 #include "SparkFun_SHTC3.h"
 
-// Crear un servidor web en el puerto 80
-WebServer server(80);
+AsyncWebServer server(80);
+DNSServer dnsServer;
 Preferences preferences;
 
-// Configuración del Access Point
 const char* ap_ssid = "ESP32_Config";
 const char* ap_password = "12345678";
 
-unsigned long lastSendTime = 0;
-
-// Configuración del sensor SHTC3
 SHTC3 mySHTC3;
 float humidity = 0;
 float temperatureNow = 0;
-
-// Configuración del servidor remoto
-// url servidor dev "https://cd2024bfi1g1-dev.dev.campusdual.com/measurements/measurements"
+unsigned long lastSendTime = 0;
 String server_url = "";
 
-void setup() {
-  Serial.begin(9600);
-
-  preferences.begin("wifi-config", false);
-
-  // Verificar si el flag de configuración está presente
-  bool configured = preferences.getBool("configured", false);
-
-  if (!configured) {
-    // No hay configuración guardada, iniciar en modo AP
-    Serial.println("No se encontró configuración. Iniciando modo AP...");
-    startAccessPoint();
-  } else {
-    // Intentar conectarse a WiFi con las credenciales guardadas
-    String wifiSSID = preferences.getString("ssid", "");
-    String wifiPassword = preferences.getString("password", "");
-    server_url = preferences.getString("server_url", "");
-
-    if (wifiSSID.length() > 0 && wifiPassword.length() > 0 && server_url.length() > 0) {
-      Serial.println("Intentando conectar al WiFi guardado...");
-      WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
-
-      unsigned long startTime = millis();
-      while (WiFi.status() != WL_CONNECTED && millis() - startTime < 10000) {  // Tiempo de espera 10s
-        delay(500);
-        Serial.print(".");
-      }
-
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("\nWiFi conectado");
-        Serial.print("Dirección IP: ");
-        Serial.println(WiFi.localIP());
-
-        // Configurar mDNS
-        if (MDNS.begin("esp32")) {  // esp32.local
-          Serial.println("mDNS responder iniciado. Accede a: http://esp32.local");
-        } else {
-          Serial.println("Error al iniciar mDNS responder.");
-        }
-
-        initSensor();
-      } else {
-        Serial.println("\nNo se pudo conectar al WiFi guardado. Iniciando modo AP...");
-        startAccessPoint();
-      }
-    } else {
-      Serial.println("Datos incompletos. Iniciando modo AP...");
-      startAccessPoint();
-    }
-  }
-
-  // Configurar rutas del servidor HTTP
-  server.on("/", handleRoot);
-  server.on("/save", handleSave);
-  server.on("/reset", handleReset);
-  server.begin();
-  Serial.println("Servidor HTTP iniciado.");
-}
-
-void loop() {
-  server.handleClient();  // Siempre manejar solicitudes HTTP
-
-  if (WiFi.status() == WL_CONNECTED) {
-    unsigned long currentTime = millis();
-    if (currentTime - lastSendTime >= 60000) {  // 60000 ms = 1 minuto
-      if (mySHTC3.update() == SHTC3_Status_Nominal) {
-        temperatureNow = mySHTC3.toDegC();
-        humidity = mySHTC3.toPercent();
-
-        Serial.print("Temperatura (ºC): ");
-        Serial.println(temperatureNow);
-        Serial.print("Humedad (%): ");
-        Serial.println(humidity);
-
-        sendDataToServer();
-        lastSendTime = currentTime;
-      } else {
-        Serial.println("Error al leer el sensor.");
-      }
-    }
-  }
-}
-
-// Iniciar Access Point
-void startAccessPoint() {
-  WiFi.softAP(ap_ssid, ap_password);
-  Serial.print("Access Point iniciado. Conéctate a: ");
-  Serial.println(ap_ssid);
-  Serial.print("IP del ESP32: ");
-  Serial.println(WiFi.softAPIP());
-}
-
-// Página web principal
-void handleRoot() {
-  String html = R"rawliteral(
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <title>Configuración ESP32</title>
-      <style>
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Configuration</title>
+  <style>
         body {
           font-family: Arial, sans-serif;
           margin: 0;
@@ -177,235 +81,142 @@ void handleRoot() {
           margin-top: 10px;
         }
       </style>
-    </head>
-    <body>
-      <div class="container">
-        <h1>Configura tu red WiFi y servidor</h1>
-        <form action="/save" method="GET">
-          <label for="ssid">SSID:</label>
-          <input type="text" id="ssid" name="ssid">
-          <label for="password">Contraseña:</label>
-          <input type="password" id="password" name="password">
-          <label for="server_url">URL del servidor:</label>
-          <input type="text" id="server_url" name="server_url">
-          <input type="submit" value="Guardar" class="save">
-        </form>
-        <form action="/reset" method="GET">
-          <input type="submit" value="Resetear Configuración" class="reset">
-        </form>
-      </div>
-    </body>
-    </html>
-  )rawliteral";
-  server.send(200, "text/html; charset=UTF-8", html);
-}
+</head>
+<body>
+  <div class="container">
+    <h1>Configuración</h1>
+    <form action="/save" method="POST">
+      <label for="ssid">SSID:</label>
+      <input type="text" id="ssid" name="ssid" required>
+      <label for="password">Contraseña:</label>
+      <input type="password" id="password" name="password" required>
+      <label for="server_url">URL del servidor:</label>
+      <input type="text" id="server_url" name="server_url" required>
+      <input type="submit" value="Guardar" class="save">
+    </form>
+    <form action="/reset" method="POST">
+      <input type="submit" value="Resetear Configuración" class="reset">
+    </form>
+  </div>
+</body>
+</html>
+)rawliteral";
 
-// Guardar credenciales y servidor
-void handleSave() {
-  String wifiSSID = server.arg("ssid");
-  String wifiPassword = server.arg("password");
-  String newServerURL = server.arg("server_url");
-
-  if (wifiSSID.length() > 0 && wifiPassword.length() > 0 && newServerURL.length() > 0) {
-    preferences.putString("ssid", wifiSSID);
-    preferences.putString("password", wifiPassword);
-    preferences.putString("server_url", newServerURL);
-    preferences.putBool("configured", true);  // Marcar como configurado
-
-    server_url = newServerURL;  // Actualizar la URL en tiempo real
-
-    String html = R"rawliteral(
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>Configuración Guardada</title>
-        <style>
-          body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            background-color: #f4f4f4;
-          }
-          .container {
-            background-color: #fff;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            max-width: 400px;
-            width: 100%;
-            text-align: center;
-          }
-          h1 {
-            color: #333;
-          }
-          p {
-            color: #555;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h1>Configuración guardada</h1>
-          <p>El dispositivo se actualizará con la nueva configuración.</p>
-        </div>
-      </body>
-      </html>
-    )rawliteral";
-    server.send(200, "text/html; charset=UTF-8", html);
-
-    Serial.println("Nueva URL configurada: " + newServerURL);
-
-    //Intentar conectarse a la Wifi
-    Serial.println("Intentando conectar al WiFi guardado...");
-    WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
-
-    unsigned long startTime = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startTime < 10000) {  // Tiempo de espera 10s
-      delay(500);
-      Serial.print(".");
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nWiFi conectado");
-      Serial.print("Dirección IP: ");
-      Serial.println(WiFi.localIP());
-      Serial.println("Desactivando Access Point...");
-      WiFi.softAPdisconnect(true);
-    } else {
-      Serial.println("\nError al conectarse a la Wifi");
-      startAccessPoint();
-    }
-
-  } else {
-    server.send(400, "text/html; charset=UTF-8", "<h1>Error: Todos los campos son obligatorios.</h1>");
+void setup() {
+  Serial.begin(9600);
+  WiFi.mode(WIFI_AP_STA);
+  preferences.begin("wifi-config", false);
+  bool configured = preferences.getBool("configured", false);
+  String savedSSID = preferences.getString("ssid", "");
+  String savedPass = preferences.getString("password", "");
+  server_url = preferences.getString("server_url", "");
+  startCaptivePortal();
+  if (configured && !savedSSID.isEmpty() && !savedPass.isEmpty() && !server_url.isEmpty()) {
+    connectToWiFi(savedSSID, savedPass);
   }
-}
-
-// Ruta para reset manual
-void handleReset() {
-  Serial.println("Borrando credenciales WiFi y reiniciando...");
-
-  // Enviar página HTML estática con cuenta atrás
-  String html = R"rawliteral(
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <title>Reinicio del Dispositivo</title>
-      <style>
-        body {
-          font-family: Arial, sans-serif;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          height: 100vh;
-          background-color: #f4f4f4;
-          margin: 0;
-        }
-        .container {
-          background-color: #fff;
-          padding: 20px;
-          border-radius: 8px;
-          box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-          text-align: center;
-        }
-        h1 {
-          color: #333;
-        }
-        p {
-          color: #555;
-        }
-      </style>
-      <script>
-        let countdown = 5;
-        function updateCountdown() {
-          document.getElementById('countdown').innerText = countdown;
-          if (countdown > 0) {
-            countdown--;
-            setTimeout(updateCountdown, 1000);
-          }
-        }
-        window.onload = updateCountdown;
-      </script>
-    </head>
-    <body>
-      <div class="container">
-        <h1>Reiniciando el Dispositivo</h1>
-        <p>El dispositivo se pondrá en modo AP.</p>
-        <p>Por favor, conéctate a la red WiFi "ESP32_Config".</p>
-        <p>Reinicio en <span id="countdown">5</span> segundos...</p>
-      </div>
-    </body>
-    </html>
-  )rawliteral";
-  server.send(200, "text/html; charset=UTF-8", html);
-
-  // Esperar unos segundos antes de reiniciar
-  delay(5000);
-
-  // Borrar credenciales y reiniciar
-  preferences.clear();
-  preferences.putBool("reset_flag", true);  // Configurar flag de reset
-  preferences.end();
-  ESP.restart();
-}
-
-// Iniciar sensor
-void initSensor() {
-  Serial.println("Inicializando sensor SHTC3...");
   Wire.begin();
-  if (mySHTC3.begin() == SHTC3_Status_Nominal) {
-    Serial.println("Sensor SHTC3 inicializado correctamente.");
-  } else {
-    Serial.println("Error al inicializar el sensor SHTC3.");
-    while (1)
-      ;
+  if (mySHTC3.begin() != SHTC3_Status_Nominal) {
+    Serial.println("Error initializing the SHTC3 sensor!");
+    while(1);
   }
 }
 
-// Enviar datos al servidor
-void sendDataToServer() {
-  if (server_url.length() == 0) {
-    Serial.println("Error: La URL del servidor está vacía.");
-    return;
+void loop() {
+  dnsServer.processNextRequest();
+  if (WiFi.status() == WL_CONNECTED) {
+    if (millis() - lastSendTime >= 60000) {
+      readSensorData();
+      sendDataToServer();
+      lastSendTime = millis();
+    }
   }
+}
 
-  HTTPClient http;
+void startCaptivePortal() {
+  WiFi.softAP(ap_ssid, ap_password);
+  Serial.print("Access Point started: ");
+  Serial.println(WiFi.softAPIP());
+  dnsServer.start(53, "*", WiFi.softAPIP());
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/html", index_html);
+  });
+  server.on("/save", HTTP_POST, [](AsyncWebServerRequest *request){
+    String ssid = request->arg("ssid");
+    String password = request->arg("password");
+    String serverUrl = request->arg("server_url");
+    if(ssid.length() > 0 && password.length() > 0 && serverUrl.length() > 0) {
+      preferences.putString("ssid", ssid);
+      preferences.putString("password", password);
+      preferences.putString("server_url", serverUrl);
+      preferences.putBool("configured", true);
+      server_url = serverUrl;
+      request->send(200, "text/html", "<script>setTimeout(function(){window.location.href='/';},5000);</script>Configuration saved. Reconnecting...");
+      connectToWiFi(ssid, password);
+    } else {
+      request->send(400, "text/plain", "All fields are required");
+    }
+  });
+  server.on("/reset", HTTP_POST, [](AsyncWebServerRequest *request){
+    preferences.clear();
+    request->send(200, "text/html", "<script>setTimeout(function(){window.location.href='/';},3000);</script>Configuration reset. Restarting...");
+    delay(3000);
+    ESP.restart();
+  });
+  server.onNotFound([](AsyncWebServerRequest *request){
+    request->redirect("http://" + WiFi.softAPIP().toString() + "/");
+  });
+  server.begin();
+}
 
-  Serial.print("Enviando datos al servidor: ");
-  Serial.println(server_url);
-
-  http.begin(server_url);
-  http.addHeader("Authorization", "Basic YWRtaW5NaWNyb3M6YWRtaW5taWNyb3MxMjM=");
-  http.addHeader("Content-Type", "application/json");
-
-  String macAddress = WiFi.macAddress();
-
-  String payload = "{";
-    payload += "\"data\": {";
-    payload += "\"DEV_MAC\":\"" + WiFi.macAddress() + "\",";
-    payload += "\"ME_TEMP\":" + String(temperatureNow) + ",";
-    payload += "\"ME_HUMIDITY\":" + String(humidity);
-    payload += "}}";
-
-  Serial.print("Payload enviado: ");
-  Serial.println(payload);
-
-  int httpResponseCode = http.POST(payload);
-
-  if (httpResponseCode > 0) {
-    String response = http.getString();
-    Serial.print("Respuesta del servidor: ");
-    Serial.println(response);
+void connectToWiFi(String ssid, String password) {
+  WiFi.begin(ssid.c_str(), password.c_str());
+  Serial.println("Connecting to WiFi...");
+  unsigned long startTime = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startTime < 15000) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConnected!");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    if (!MDNS.begin("esp32")) {
+      Serial.println("Error starting mDNS!");
+    }
   } else {
-    Serial.print("Error al enviar datos: ");
-    Serial.println(http.errorToString(httpResponseCode));
+    Serial.println("\nConnection failed! Keeping AP active for reconfiguration.");
   }
+}
 
+void readSensorData() {
+  if (mySHTC3.update() == SHTC3_Status_Nominal) {
+    temperatureNow = mySHTC3.toDegC();
+    humidity = mySHTC3.toPercent();
+    Serial.printf("Temperature: %.2f°C, Humidity: %.2f%%\n", temperatureNow, humidity);
+  } else {
+    Serial.println("Error reading the sensor!");
+  }
+}
+
+void sendDataToServer() {
+  if (server_url.isEmpty()) return;
+  HTTPClient http;
+  String full_url = server_url + "/measurements/measurements";
+  http.begin(full_url);
+  http.addHeader("Authorization", "Basic aHVnb21pY3JvczpodWdvbWljcm9z"); //user and password: hugomicros
+  http.addHeader("Content-Type", "application/json");
+  String payload = "{";
+  payload += "\"data\": {";
+  payload += "\"DEV_MAC\":\"" + WiFi.macAddress() + "\",";
+  payload += "\"ME_TEMP\":" + String(temperatureNow) + ",";
+  payload += "\"ME_HUMIDITY\":" + String(humidity);
+  payload += "}}";
+  int httpCode = http.POST(payload);
+  if (httpCode > 0) {
+    Serial.println("URL being sent to: " + full_url);
+    Serial.printf("Data sent. Code: %d\n", httpCode);
+  } else {
+    Serial.printf("Error sending data: %s\n", http.errorToString(httpCode).c_str());
+  }
   http.end();
 }
